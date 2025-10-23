@@ -64,3 +64,33 @@ if [[ "${WRT_TARGET^^}" == *"QUALCOMMAX"* ]]; then
 		echo "qualcommax set up nowifi successfully!"
 	fi
 fi
+
+#DNS改用AdGuardHome
+DNS_FILE="./package/base-files/files/etc/uci-defaults/99-disable-dnsmasq-dns"
+cat <<EOF >> $DNS_FILE
+#!/bin/sh
+# OpenWrt AdGuardHome 专用配置
+# 作用：关闭 dnsmasq DNS、禁止 IPv6 DNS 下发、系统只用本地 AdGuardHome
+#dnsmasq 设置
+ # 关闭 DNS 监听
+uci set dhcp.@dnsmasq[0].port='0'
+# 不使用系统 resolv.conf.auto
+uci delete dhcp.@dnsmasq[0].resolvfile 2>/dev/null
+uci set dhcp.@dnsmasq[0].noresolv='1'
+# 禁用 IPv6 DNS 通告
+uci set dhcp.lan.ra_dns='0'
+uci set dhcp.lan.dns_service='0'
+# 保留 DHCPv6 分配地址功能
+uci set dhcp.lan.dhcpv6='server'
+# 手动添加自定义上游 DNS 系统指向本地 AdGuardHome(可不配置，无意义了)
+uci add_list dhcp.@dnsmasq[0].server='8.8.8.8'
+uci commit dhcp
+/etc/init.d/dnsmasq restart
+/etc/init.d/odhcpd restart
+# 启用 AdGuard Home
+uci set adguardhome.config.enabled='1'
+uci commit adguardhome
+/etc/init.d/AdGuardHome restart
+exit 0
+EOF
+chmod +x ./package/base-files/files/etc/uci-defaults/99-disable-dnsmasq-dns
