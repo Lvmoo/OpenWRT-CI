@@ -70,39 +70,61 @@ DNS_FILE="./package/base-files/files/etc/uci-defaults/99-disable-dnsmasq-dns"
 cat <<EOF >> $DNS_FILE
 #!/bin/sh
 # OpenWrt AdGuardHome 专用配置
-# 作用：关闭 dnsmasq DNS、禁止 IPv6 DNS 下发、系统只用本地 AdGuardHome
-#dnsmasq 设置
- # 关闭 DNS 监听
+
+logger -t adguard-setup "Starting AdGuard Home initial setup"
+
+# 1. 配置 dnsmasq（保留 DHCP 功能，禁用 DNS）
 uci set dhcp.@dnsmasq[0].port='0'
-# 不使用系统 resolv.conf.auto
 uci set dhcp.@dnsmasq[0].noresolv='1'
+uci set dhcp.@dnsmasq[0].dns_redirect='0'  # 关键：禁用 DNS 重定向 否则会劫持 需要手动不断运行nft delete table inet dnsmasq
 uci delete dhcp.@dnsmasq[0].resolvfile 2>/dev/null
 uci delete dhcp.@dnsmasq[0].server 2>/dev/null
-# 禁用 IPv6 DNS 通告
+
+# 2. 禁用 IPv6 DNS 通告
 uci set dhcp.lan.ra_dns='0'
 uci set dhcp.lan.dns_service='0'
-# 保留 DHCPv6 分配地址功能
 uci set dhcp.lan.dhcpv6='server'
-# 手动添加自定义上游 DNS 系统指向本地 AdGuardHome(可不配置，无意义了)
-#uci add_list dhcp.@dnsmasq[0].server='8.8.8.8'
+
+# 3. 配置 DHCP DNS 选项
+lan_ip=$(uci get network.lan.ipaddr 2>/dev/null | cut -d'/' -f1)
+if [ -n "$lan_ip" ]; then
+    uci -q delete dhcp.lan.dhcp_option
+    uci add_list dhcp.lan.dhcp_option="6,$lan_ip"
+fi
+
 uci commit dhcp
+
+# 4. 重启服务
 /etc/init.d/dnsmasq stop
 sleep 2
-# 清除可能存在的 dnsmasq 劫持规则
-nft delete table inet dnsmasq 2>/dev/null || true
-# 重启 dnsmasq（仅 DHCP 功能）
 /etc/init.d/dnsmasq start
-# 启用 AdGuard Home
-uci set adguardhome.config.enabled='1'
-uci commit adguardhome
-/etc/init.d/adguardhome restart
-# 验证配置
-echo "=== DNS 配置完成 ==="
-echo "AdGuard Home 监听状态:"
-netstat -tulpn | grep :53
-echo ""
-echo "nftables 规则检查:"
-nft list tables | grep -i dnsmasq && echo "警告: dnsmasq 劫持规则仍存在!" || echo "OK: 无 dnsmasq 劫持规则"
+sleep 2
+
+# 5. 启动 AdGuard Home
+uci set adguardhome.config.enabled='1' 2>/dev/null
+uci commit adguardhome 2>/dev/null
+/etc/init.d/adguardhome  enable
+/etc/init.d/adguardhome  start
+sleep 5
+
+# 6. 验证
+if netstat -tulpn 2>/dev/null | grep -q "0.0.0.0:53.*AdGuardHome"; then
+    logger -t adguard-setup "SUCCESS: AdGuard Home listening on IPv4 and IPv6"
+elif netstat -tulpn 2>/dev/null | grep -q ":::53.*AdGuardHome"; then
+    logger -t adguard-setup "WARNING: AdGuard Home only listening on IPv6"
+else
+    logger -t adguard-setup "ERROR: AdGuard Home not listening on port 53"
+fi
+
+if nft list tables 2>/dev/null | grep -q dnsmasq; then
+    logger -t adguard-setup "WARNING: dnsmasq hijack table still exists"
+    nft delete table inet dnsmasq 2>/dev/null
+else
+    logger -t adguard-setup "SUCCESS: No dnsmasq DNS hijacking"
+fi
+
+logger -t adguard-setup "AdGuard Home setup completed"
+
 exit 0
 EOF
 chmod +x $DNS_FILE
@@ -390,7 +412,7 @@ if [ "$current_dns" != "$new_dns" ]; then
     nft delete table inet dnsmasq 2>/dev/null
     
     # 确保 AdGuard Home 正在运行
-    /etc/init.d/adguardhome status >/dev/null 2>&1 || /etc/init.d/adguardhome start
+    /etc/init.d/adguardhome  status >/dev/null 2>&1 || /etc/init.d/adguardhome  start
     
     logger -t dhcp-dns "Updated DHCP DNS to $lan_ip and cleaned dnsmasq hijack rules"
 fi
