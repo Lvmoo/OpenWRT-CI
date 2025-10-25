@@ -95,7 +95,7 @@ nft delete table inet dnsmasq 2>/dev/null || true
 # 启用 AdGuard Home
 uci set adguardhome.config.enabled='1'
 uci commit adguardhome
-/etc/init.d/AdGuardHome restart
+/etc/init.d/adguardhome restart
 # 验证配置
 echo "=== DNS 配置完成 ==="
 echo "AdGuard Home 监听状态:"
@@ -349,19 +349,16 @@ EOF
 ##网络接口触发器更新dns服务器
 HTOPLUG_DIR="./package/base-files/files/etc/hotplug.d/iface"
 mkdir -p $HTOPLUG_DIR
-cat <<'EOF' >> $HTOPLUG_DIR/99-update-dhcp-dns
+cat <<'EOF' > $HTOPLUG_DIR/99-update-dhcp-dns
 #!/bin/sh
-
 # 只处理 lan 接口的 ifup 事件
 [ "$ACTION" = "ifup" ] || exit 0
 [ "$INTERFACE" = "lan" ] || exit 0
 
 # 获取当前 LAN IP
 lan_ip=$(uci get network.lan.ipaddr 2>/dev/null | cut -d'/' -f1)
-
 # 如果获取失败,尝试从接口获取
 [ -z "$lan_ip" ] && lan_ip=$(ip -4 addr show br-lan 2>/dev/null | grep inet | awk '{print $2}' | cut -d'/' -f1)
-
 # 如果还是为空,退出
 [ -z "$lan_ip" ] && exit 0
 
@@ -376,12 +373,31 @@ if [ "$current_dns" != "$new_dns" ]; then
     
     # 添加新的 DNS 选项
     uci add_list dhcp.lan.dhcp_option="$new_dns"
+    
+    # 确保 dnsmasq DNS 保持禁用状态
+    uci set dhcp.@dnsmasq[0].port='0'
+    uci set dhcp.@dnsmasq[0].noresolv='1'
+    
     uci commit dhcp
     
     # 重启 dnsmasq
     /etc/init.d/dnsmasq restart
     
-    logger -t dhcp-dns "Updated DHCP DNS option to $lan_ip"
+    # 等待 dnsmasq 启动
+    sleep 2
+    
+    # 关键：清除可能被重新创建的 dnsmasq 劫持规则
+    nft delete table inet dnsmasq 2>/dev/null
+    
+    # 确保 AdGuard Home 正在运行
+    /etc/init.d/adguardhome status >/dev/null 2>&1 || /etc/init.d/adguardhome start
+    
+    logger -t dhcp-dns "Updated DHCP DNS to $lan_ip and cleaned dnsmasq hijack rules"
 fi
+
+# 无论是否更新，都清理劫持规则（防护性措施）
+nft delete table inet dnsmasq 2>/dev/null
+
+exit 0
 EOF
 chmod +x $HTOPLUG_DIR/99-update-dhcp-dns
