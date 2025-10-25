@@ -93,13 +93,13 @@ uci commit adguardhome
 /etc/init.d/AdGuardHome restart
 exit 0
 EOF
-chmod +x ./package/base-files/files/etc/uci-defaults/99-disable-dnsmasq-dns
+chmod +x $DNS_FILE
 
 #AdGuardHome默认配置
 #取消认证可以注释users:段
 ADG_DIR="./package/base-files/files/etc/adguardhome"
 mkdir -p $ADG_DIR
-cat <<EOF >> $ADG_DIR/adguardhome.yaml
+cat <<'EOF' >> $ADG_DIR/adguardhome.yaml
 http:
   pprof:
     port: 6060
@@ -333,3 +333,43 @@ os:
   rlimit_nofile: 0
 schema_version: 30
 EOF
+
+##网络接口触发器更新dns服务器
+HTOPLUG_DIR="./package/base-files/files/etc/hotplug.d/iface"
+mkdir -p $HTOPLUG_DIR
+cat <<'EOF' >> $HTOPLUG_DIR/99-update-dhcp-dns
+#!/bin/sh
+
+# 只处理 lan 接口的 ifup 事件
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "lan" ] || exit 0
+
+# 获取当前 LAN IP
+lan_ip=$(uci get network.lan.ipaddr 2>/dev/null | cut -d'/' -f1)
+
+# 如果获取失败,尝试从接口获取
+[ -z "$lan_ip" ] && lan_ip=$(ip -4 addr show br-lan 2>/dev/null | grep inet | awk '{print $2}' | cut -d'/' -f1)
+
+# 如果还是为空,退出
+[ -z "$lan_ip" ] && exit 0
+
+# 获取当前配置的 DNS 选项
+current_dns=$(uci get dhcp.lan.dhcp_option 2>/dev/null | grep "^6,")
+
+# 检查是否需要更新
+new_dns="6,$lan_ip"
+if [ "$current_dns" != "$new_dns" ]; then
+    # 删除旧的 DNS 选项
+    uci -q delete dhcp.lan.dhcp_option
+    
+    # 添加新的 DNS 选项
+    uci add_list dhcp.lan.dhcp_option="$new_dns"
+    uci commit dhcp
+    
+    # 重启 dnsmasq
+    /etc/init.d/dnsmasq restart
+    
+    logger -t dhcp-dns "Updated DHCP DNS option to $lan_ip"
+fi
+EOF
+chmod +x $HTOPLUG_DIR/99-update-dhcp-dns
