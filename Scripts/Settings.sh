@@ -75,22 +75,34 @@ cat <<EOF >> $DNS_FILE
  # 关闭 DNS 监听
 uci set dhcp.@dnsmasq[0].port='0'
 # 不使用系统 resolv.conf.auto
-uci delete dhcp.@dnsmasq[0].resolvfile 2>/dev/null
 uci set dhcp.@dnsmasq[0].noresolv='1'
+uci delete dhcp.@dnsmasq[0].resolvfile 2>/dev/null
+uci delete dhcp.@dnsmasq[0].server 2>/dev/null
 # 禁用 IPv6 DNS 通告
 uci set dhcp.lan.ra_dns='0'
 uci set dhcp.lan.dns_service='0'
 # 保留 DHCPv6 分配地址功能
 uci set dhcp.lan.dhcpv6='server'
 # 手动添加自定义上游 DNS 系统指向本地 AdGuardHome(可不配置，无意义了)
-uci add_list dhcp.@dnsmasq[0].server='8.8.8.8'
+#uci add_list dhcp.@dnsmasq[0].server='8.8.8.8'
 uci commit dhcp
-/etc/init.d/dnsmasq restart
-/etc/init.d/odhcpd restart
+/etc/init.d/dnsmasq stop
+sleep 2
+# 清除可能存在的 dnsmasq 劫持规则
+nft delete table inet dnsmasq 2>/dev/null || true
+# 重启 dnsmasq（仅 DHCP 功能）
+/etc/init.d/dnsmasq start
 # 启用 AdGuard Home
 uci set adguardhome.config.enabled='1'
 uci commit adguardhome
 /etc/init.d/AdGuardHome restart
+# 验证配置
+echo "=== DNS 配置完成 ==="
+echo "AdGuard Home 监听状态:"
+netstat -tulpn | grep :53
+echo ""
+echo "nftables 规则检查:"
+nft list tables | grep -i dnsmasq && echo "警告: dnsmasq 劫持规则仍存在!" || echo "OK: 无 dnsmasq 劫持规则"
 exit 0
 EOF
 chmod +x $DNS_FILE
