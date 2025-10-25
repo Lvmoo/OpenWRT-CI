@@ -97,8 +97,9 @@ chmod +x ./package/base-files/files/etc/uci-defaults/99-disable-dnsmasq-dns
 
 #AdGuardHome默认配置
 #取消认证可以注释users:段
-ADG_FILE="./package/base-files/files/etc/adguardhome/adguardhome.yaml"
-cat <<EOF >> $ADG_FILE
+ADG_DIR="./package/base-files/files/etc/adguardhome"
+mkdir -p $ADG_DIR
+cat <<EOF >> $ADG_FILE/adguardhome.yaml
 http:
   pprof:
     port: 6060
